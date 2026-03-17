@@ -1,4 +1,5 @@
 mod agent_configuration;
+pub(crate) mod agent_connection_store;
 mod agent_diff;
 mod agent_model_selector;
 mod agent_panel;
@@ -7,9 +8,9 @@ mod branch_names;
 mod buffer_codegen;
 mod completion_provider;
 mod config_options;
-pub(crate) mod connection_view;
 mod context;
 mod context_server_configuration;
+pub(crate) mod conversation_view;
 mod entry_view_state;
 mod external_source_prompt;
 mod favorite_models;
@@ -22,6 +23,7 @@ mod mode_selector;
 mod model_selector;
 mod model_selector_popover;
 mod profile_selector;
+pub mod sidebar;
 mod slash_command;
 mod slash_command_picker;
 mod terminal_codegen;
@@ -31,6 +33,9 @@ pub mod test_support;
 mod text_thread_editor;
 mod text_thread_history;
 mod thread_history;
+mod thread_history_view;
+mod thread_metadata_store;
+mod threads_archive_view;
 mod ui;
 
 use std::rc::Rc;
@@ -51,7 +56,7 @@ use language::{
 use language_model::{
     ConfiguredModel, LanguageModelId, LanguageModelProviderId, LanguageModelRegistry,
 };
-use project::DisableAiSettings;
+use project::{AgentId, DisableAiSettings};
 use prompt_store::PromptBuilder;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -66,13 +71,14 @@ pub use crate::agent_panel::{
 use crate::agent_registry_ui::AgentRegistryPage;
 pub use crate::inline_assistant::InlineAssistant;
 pub use agent_diff::{AgentDiffPane, AgentDiffToolbar};
-pub(crate) use connection_view::ConnectionView;
+pub(crate) use conversation_view::ConversationView;
 pub use external_source_prompt::ExternalSourcePrompt;
 pub(crate) use mode_selector::ModeSelector;
 pub(crate) use model_selector::ModelSelector;
 pub(crate) use model_selector_popover::ModelSelectorPopover;
 pub use text_thread_editor::{AgentPanelDelegate, TextThreadEditor};
-pub(crate) use thread_history::*;
+pub(crate) use thread_history::ThreadHistory;
+pub(crate) use thread_history_view::*;
 use zed_actions;
 
 actions!(
@@ -82,6 +88,8 @@ actions!(
         NewTextThread,
         /// Toggles the menu to create new agent threads.
         ToggleNewThreadMenu,
+        /// Cycles through the options for where new threads start (current project or new worktree).
+        CycleStartThreadIn,
         /// Toggles the navigation menu for switching between threads and views.
         ToggleNavigationMenu,
         /// Toggles the options menu for agent settings and preferences.
@@ -199,7 +207,7 @@ pub struct NewThread;
 #[serde(deny_unknown_fields)]
 pub struct NewExternalAgentThread {
     /// Which agent to use for the conversation.
-    agent: Option<ExternalAgent>,
+    agent: Option<Agent>,
 }
 
 #[derive(Clone, PartialEq, Deserialize, JsonSchema, Action)]
@@ -210,14 +218,17 @@ pub struct NewNativeAgentThreadFromSummary {
 }
 
 // TODO unify this with AgentType
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
-pub enum ExternalAgent {
+pub enum Agent {
     NativeAgent,
-    Custom { name: SharedString },
+    Custom {
+        #[serde(rename = "name")]
+        id: AgentId,
+    },
 }
 
-impl ExternalAgent {
+impl Agent {
     pub fn server(
         &self,
         fs: Arc<dyn fs::Fs>,
@@ -225,7 +236,9 @@ impl ExternalAgent {
     ) -> Rc<dyn agent_servers::AgentServer> {
         match self {
             Self::NativeAgent => Rc::new(agent::NativeAgentServer::new(fs, thread_store)),
-            Self::Custom { name } => Rc::new(agent_servers::CustomAgentServer::new(name.clone())),
+            Self::Custom { id: name } => {
+                Rc::new(agent_servers::CustomAgentServer::new(name.clone()))
+            }
         }
     }
 }
@@ -314,6 +327,7 @@ pub fn init(
     agent_panel::init(cx);
     context_server_configuration::init(language_registry.clone(), fs.clone(), cx);
     TextThreadEditor::init(cx);
+    thread_metadata_store::init(cx);
 
     register_slash_commands(cx);
     inline_assistant::init(fs.clone(), prompt_builder.clone(), cx);
@@ -592,6 +606,7 @@ mod tests {
             message_editor_min_lines: 1,
             tool_permissions: Default::default(),
             show_turn_stats: false,
+            new_thread_location: Default::default(),
         };
 
         cx.update(|cx| {
@@ -682,5 +697,19 @@ mod tests {
                 "EditPrediction should be hidden when provider is None"
             );
         });
+    }
+
+    #[test]
+    fn test_deserialize_external_agent_variants() {
+        assert_eq!(
+            serde_json::from_str::<Agent>(r#""native_agent""#).unwrap(),
+            Agent::NativeAgent,
+        );
+        assert_eq!(
+            serde_json::from_str::<Agent>(r#"{"custom":{"name":"my-agent"}}"#).unwrap(),
+            Agent::Custom {
+                id: "my-agent".into(),
+            },
+        );
     }
 }
