@@ -1,3 +1,4 @@
+use std::any::Any;
 use std::cmp::min;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -19,7 +20,7 @@ use settings::Settings;
 use theme::ThemeSettings;
 use ui::{WithScrollbar, prelude::*};
 use util::normalize_path;
-use workspace::item::{Item, ItemHandle};
+use workspace::item::{Item, ItemHandle, ItemNavHistory};
 use workspace::{OpenOptions, OpenVisible, Pane, Workspace};
 
 use crate::{
@@ -41,6 +42,12 @@ pub struct MarkdownPreviewView {
     base_directory: Option<PathBuf>,
     pending_update_task: Option<Task<Result<()>>>,
     mode: MarkdownPreviewMode,
+    nav_history: Option<ItemNavHistory>,
+}
+
+#[derive(Clone)]
+struct MarkdownPreviewNavigationData {
+    path: PathBuf,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -234,6 +241,7 @@ impl MarkdownPreviewView {
                 base_directory: None,
                 pending_update_task: None,
                 mode,
+                nav_history: None,
             };
 
             this.set_editor(active_editor, window, cx);
@@ -447,6 +455,18 @@ impl MarkdownPreviewView {
         } else {
             None
         }
+    }
+
+    fn current_displayed_path(&self, cx: &App) -> Option<PathBuf> {
+        if let Some(state) = &self.active_editor {
+            let editor = state.editor.read(cx);
+            if let Some(file) = editor.file_at(MultiBufferOffset(0), cx) {
+                if let Some(local) = file.as_local() {
+                    return Some(local.abs_path(cx).to_path_buf());
+                }
+            }
+        }
+        None
     }
 
     fn line_scroll_amount(&self, cx: &App) -> Pixels {
@@ -737,6 +757,60 @@ impl Item for MarkdownPreviewView {
                 format!("Preview {}", title).into()
             })
             .unwrap_or_else(|| SharedString::from("Markdown Preview"))
+    }
+
+    fn deactivated(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(nav_history) = &mut self.nav_history {
+            if let Some(path) = self.current_displayed_path(cx) {
+                nav_history.push(Some(MarkdownPreviewNavigationData { path }), cx);
+            }
+        }
+    }
+
+    fn set_nav_history(
+        &mut self,
+        history: ItemNavHistory,
+        _window: &mut Window,
+        _cx: &mut Context<Self>,
+    ) {
+        self.nav_history = Some(history);
+    }
+
+    fn navigate(
+        &mut self,
+        data: Arc<dyn Any + Send>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if let Some(nav_data) = data.downcast_ref::<MarkdownPreviewNavigationData>() {
+            let path = nav_data.path.clone();
+            let workspace = self.workspace.clone();
+            if let Some(workspace) = workspace.upgrade() {
+                let open_task = workspace.update(cx, |workspace, cx| {
+                    workspace.open_abs_path(
+                        path,
+                        OpenOptions {
+                            visible: Some(OpenVisible::None),
+                            ..Default::default()
+                        },
+                        window,
+                        cx,
+                    )
+                });
+                cx.spawn_in(window, async move |view, cx| {
+                    let item = open_task.await?;
+                    view.update_in(cx, |view, window, cx| {
+                        if let Some(editor) = item.act_as::<Editor>(cx) {
+                            view.set_editor(editor, window, cx);
+                        }
+                    })
+                })
+                .detach_and_log_err(cx);
+            }
+            true
+        } else {
+            false
+        }
     }
 
     fn telemetry_event_text(&self) -> Option<&'static str> {
