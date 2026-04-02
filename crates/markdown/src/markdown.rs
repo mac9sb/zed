@@ -967,19 +967,69 @@ impl MarkdownElement {
     fn push_markdown_block_quote(
         &self,
         builder: &mut MarkdownElementBuilder,
+        kind: Option<&pulldown_cmark::BlockQuoteKind>,
         range: &Range<usize>,
         markdown_end: usize,
+        cx: &App,
     ) {
         builder.push_text_style(self.style.block_quote.clone());
-        builder.push_div(
-            div()
-                .pl_4()
-                .mb_2()
-                .border_l_4()
-                .border_color(self.style.block_quote_border_color),
-            range,
-            markdown_end,
-        );
+
+        if let Some(kind) = kind {
+            let (icon_name, label, color) = match kind {
+                pulldown_cmark::BlockQuoteKind::Note => {
+                    (IconName::Info, "Note", Color::Info)
+                }
+                pulldown_cmark::BlockQuoteKind::Tip => {
+                    (IconName::Flame, "Tip", Color::Success)
+                }
+                pulldown_cmark::BlockQuoteKind::Important => {
+                    (IconName::Info, "Important", Color::Accent)
+                }
+                pulldown_cmark::BlockQuoteKind::Warning => {
+                    (IconName::Warning, "Warning", Color::Warning)
+                }
+                pulldown_cmark::BlockQuoteKind::Caution => {
+                    (IconName::Warning, "Caution", Color::Error)
+                }
+            };
+
+            let border_color = color.color(cx);
+
+            let header = div()
+                .h_flex()
+                .gap_1p5()
+                .items_center()
+                .mb_1()
+                .child(Icon::new(icon_name).size(IconSize::Small).color(color))
+                .child(
+                    div()
+                        .text_sm()
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(border_color)
+                        .child(label),
+                );
+
+            builder.push_div(
+                div()
+                    .pl_4()
+                    .mb_2()
+                    .border_l_4()
+                    .border_color(border_color)
+                    .child(header),
+                range,
+                markdown_end,
+            );
+        } else {
+            builder.push_div(
+                div()
+                    .pl_4()
+                    .mb_2()
+                    .border_l_4()
+                    .border_color(self.style.block_quote_border_color),
+                range,
+                markdown_end,
+            );
+        }
     }
 
     fn pop_markdown_block_quote(&self, builder: &mut MarkdownElementBuilder) {
@@ -1420,8 +1470,14 @@ impl Element for MarkdownElement {
                         MarkdownTag::Heading { level, .. } => {
                             self.push_markdown_heading(&mut builder, *level, range, markdown_end);
                         }
-                        MarkdownTag::BlockQuote => {
-                            self.push_markdown_block_quote(&mut builder, range, markdown_end);
+                        MarkdownTag::BlockQuote(kind) => {
+                            self.push_markdown_block_quote(
+                                &mut builder,
+                                kind.as_ref(),
+                                range,
+                                markdown_end,
+                                cx,
+                            );
                         }
                         MarkdownTag::CodeBlock { kind, .. } => {
                             if render_mermaid_diagrams
