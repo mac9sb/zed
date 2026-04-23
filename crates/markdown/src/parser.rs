@@ -293,7 +293,7 @@ pub(crate) fn parse_markdown_with_options(
                             attrs,
                         }
                     }
-                    pulldown_cmark::Tag::BlockQuote(_kind) => MarkdownTag::BlockQuote,
+                    pulldown_cmark::Tag::BlockQuote(kind) => MarkdownTag::BlockQuote(kind),
                     pulldown_cmark::Tag::List(start_number) => MarkdownTag::List(start_number),
                     pulldown_cmark::Tag::Item => MarkdownTag::Item,
                     pulldown_cmark::Tag::FootnoteDefinition(label) => {
@@ -652,7 +652,7 @@ pub enum MarkdownTag {
         attrs: Vec<(SharedString, Option<SharedString>)>,
     },
 
-    BlockQuote,
+    BlockQuote(Option<pulldown_cmark::BlockQuoteKind>),
 
     /// A code block.
     CodeBlock {
