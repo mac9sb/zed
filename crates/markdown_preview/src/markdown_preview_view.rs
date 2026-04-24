@@ -24,16 +24,20 @@ use theme_settings::ThemeSettings;
 use ui::{ContextMenu, WithScrollbar, prelude::*, right_click_menu};
 use util::markdown::split_local_url_fragment;
 use util::normalize_path;
-use workspace::item::{Item, ItemBufferKind, ItemHandle};
+use workspace::item::{Item, ItemBufferKind, ItemHandle, ItemNavHistory};
 use workspace::searchable::{
     Direction, SearchEvent, SearchOptions, SearchToken, SearchableItem, SearchableItemHandle,
 };
 use workspace::{OpenOptions, OpenVisible, Pane, Workspace};
 
 use crate::{
-    OpenFollowingPreview, OpenPreview, OpenPreviewToTheSide, ScrollDown, ScrollDownByItem,
+    MarkdownPreviewLinkClickBehavior, OpenFollowingPreview, OpenPreview, OpenPreviewToTheSide,
+    ScrollDown, ScrollDownByItem,
 };
-use crate::{ScrollPageDown, ScrollPageUp, ScrollToBottom, ScrollToTop, ScrollUp, ScrollUpByItem};
+use crate::{
+    MarkdownPreviewSettings, ScrollPageDown, ScrollPageUp, ScrollToBottom, ScrollToTop, ScrollUp,
+    ScrollUpByItem,
+};
 
 const REPARSE_DEBOUNCE: Duration = Duration::from_millis(200);
 
@@ -49,6 +53,13 @@ pub struct MarkdownPreviewView {
     base_directory: Option<PathBuf>,
     pending_update_task: Option<Task<Result<()>>>,
     mode: MarkdownPreviewMode,
+    nav_history: Option<ItemNavHistory>,
+    navigated_path: Option<PathBuf>,
+}
+
+#[derive(Clone)]
+struct MarkdownPreviewNavigationData {
+    path: PathBuf,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -243,6 +254,8 @@ impl MarkdownPreviewView {
                 base_directory: None,
                 pending_update_task: None,
                 mode,
+                nav_history: None,
+                navigated_path: None,
             };
 
             this.set_editor(active_editor, window, cx);
@@ -459,6 +472,59 @@ impl MarkdownPreviewView {
         }
     }
 
+    fn current_displayed_path(&self, cx: &App) -> Option<PathBuf> {
+        if let Some(state) = &self.active_editor {
+            let editor = state.editor.read(cx);
+            if let Some(file) = editor.file_at(MultiBufferOffset(0), cx) {
+                if let Some(local) = file.as_local() {
+                    return Some(local.abs_path(cx).to_path_buf());
+                }
+            }
+        }
+        None
+    }
+
+    fn navigate_to_markdown_file(
+        &mut self,
+        path: PathBuf,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(nav_history) = &mut self.nav_history {
+            if let Some(current_path) = self.current_displayed_path(cx) {
+                nav_history.push(
+                    Some(MarkdownPreviewNavigationData {
+                        path: current_path,
+                    }),
+                    cx,
+                );
+            }
+        }
+        self.navigated_path = Some(path.clone());
+        if let Some(workspace) = self.workspace.upgrade() {
+            let open_task = workspace.update(cx, |workspace, cx| {
+                workspace.open_abs_path(
+                    path,
+                    OpenOptions {
+                        visible: Some(OpenVisible::None),
+                        ..Default::default()
+                    },
+                    window,
+                    cx,
+                )
+            });
+            cx.spawn_in(window, async move |view, cx| {
+                let item = open_task.await?;
+                view.update_in(cx, |view, window, cx| {
+                    if let Some(editor) = item.act_as::<Editor>(cx) {
+                        view.set_editor(editor, window, cx);
+                    }
+                })
+            })
+            .detach_and_log_err(cx);
+        }
+    }
+
     fn line_scroll_amount(&self, cx: &App) -> Pixels {
         let settings = ThemeSettings::get_global(cx);
         settings.buffer_font_size(cx) * settings.buffer_line_height.value()
@@ -621,8 +687,10 @@ impl MarkdownPreviewView {
             let workspace = self.workspace.clone();
             let base_directory = self.base_directory.clone();
             move |url, window, cx| {
+                let behavior = MarkdownPreviewSettings::get_global(cx).link_click_behavior;
                 handle_url_click(
                     url,
+                    behavior,
                     &view_handle,
                     base_directory.clone(),
                     &workspace,
@@ -670,6 +738,7 @@ impl MarkdownPreviewView {
 
 fn handle_url_click(
     url: SharedString,
+    behavior: MarkdownPreviewLinkClickBehavior,
     view: &WeakEntity<MarkdownPreviewView>,
     base_directory: Option<PathBuf>,
     workspace: &WeakEntity<Workspace>,
@@ -707,19 +776,41 @@ fn handle_url_click(
                 }
             });
         }
-    } else {
-        open_preview_url(
-            SharedString::from(path_part.to_string()),
-            base_directory,
-            workspace,
-            window,
-            cx,
-        );
+        return;
     }
+
+    if behavior == MarkdownPreviewLinkClickBehavior::Ignore {
+        return;
+    }
+
+    let path_url = SharedString::from(path_part.to_string());
+
+    if behavior == MarkdownPreviewLinkClickBehavior::Navigate {
+        if let Some(path) =
+            resolve_preview_path(path_url.as_ref(), base_directory.as_deref())
+        {
+            let view = view.clone();
+            window.defer(cx, move |window, cx| {
+                if let Some(view) = view.upgrade() {
+                    cx.update_entity(&view, |this, cx| {
+                        this.navigate_to_markdown_file(
+                            normalize_path(path.as_path()),
+                            window,
+                            cx,
+                        );
+                    });
+                }
+            });
+            return;
+        }
+    }
+
+    open_preview_url(path_url, behavior, base_directory, workspace, window, cx);
 }
 
 fn open_preview_url(
     url: SharedString,
+    behavior: MarkdownPreviewLinkClickBehavior,
     base_directory: Option<PathBuf>,
     workspace: &WeakEntity<Workspace>,
     window: &mut Window,
@@ -728,10 +819,11 @@ fn open_preview_url(
     if let Some(path) = resolve_preview_path(url.as_ref(), base_directory.as_deref())
         && let Some(workspace) = workspace.upgrade()
     {
+        let normalized = normalize_path(path.as_path());
         let _ = workspace.update(cx, |workspace, cx| {
             workspace
                 .open_abs_path(
-                    normalize_path(path.as_path()),
+                    normalized,
                     OpenOptions {
                         visible: Some(OpenVisible::None),
                         ..Default::default()
@@ -865,6 +957,30 @@ impl Item for MarkdownPreviewView {
 
     fn buffer_kind(&self, _cx: &App) -> ItemBufferKind {
         ItemBufferKind::Singleton
+    }
+
+    fn set_nav_history(
+        &mut self,
+        history: ItemNavHistory,
+        _window: &mut Window,
+        _cx: &mut Context<Self>,
+    ) {
+        self.nav_history = Some(history);
+    }
+
+    fn navigate(
+        &mut self,
+        data: Arc<dyn std::any::Any + Send>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if let Some(nav_data) = data.downcast_ref::<MarkdownPreviewNavigationData>() {
+            let path = nav_data.path.clone();
+            self.navigate_to_markdown_file(path, window, cx);
+            true
+        } else {
+            false
+        }
     }
 
     fn as_searchable(

@@ -1315,6 +1315,15 @@
     // If `enable_preview_file_from_code_navigation` or `enable_preview_multibuffer_from_code_navigation` is also true, the new tab may replace the existing one.
     "enable_keep_preview_on_code_navigation": false,
   },
+  // Settings related to the markdown preview pane.
+  "markdown_preview": {
+    // Controls the action taken when clicking a local markdown file link within the markdown preview.
+    // - "ignore": Do nothing when a local markdown link is clicked.
+    // - "open_tab": Open the linked file in a new editor tab.
+    // - "open_preview": Open the linked file in a new markdown preview tab.
+    // - "navigate": Navigate the current preview to the linked file with back/forward history.
+    "link_click_behavior": "open_tab"
+  },
   // Settings related to the file finder.
   "file_finder": {
     // Whether to show file icons in the file finder.

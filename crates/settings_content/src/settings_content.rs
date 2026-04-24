@@ -114,6 +114,8 @@ pub struct SettingsContent {
 
     pub preview_tabs: Option<PreviewTabsSettingsContent>,
 
+    pub markdown_preview: Option<MarkdownPreviewSettingsContent>,
+
     pub agent: Option<AgentSettingsContent>,
     pub agent_servers: Option<AllAgentServersSettings>,
 

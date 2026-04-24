@@ -1027,3 +1027,32 @@ pub struct FocusFollowsMouse {
     pub enabled: Option<bool>,
     pub debounce_ms: Option<u64>,
 }
+
+#[with_fallible_options]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema, MergeFrom)]
+pub struct MarkdownPreviewSettingsContent {
+    /// Controls the action taken when clicking a local markdown file link within the markdown preview.
+    ///
+    /// - `"ignore"`: Do nothing when a local markdown link is clicked.
+    /// - `"open_tab"`: Open the linked file in a new editor tab.
+    /// - `"open_preview"`: Open the linked file in a new markdown preview tab.
+    /// - `"navigate"`: Navigate the current preview to the linked file with back/forward history support.
+    ///
+    /// Default: "open_tab"
+    pub link_click_behavior: Option<MarkdownPreviewLinkClickBehavior>,
+}
+
+/// Controls what happens when a local markdown link is clicked in the preview pane.
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum MarkdownPreviewLinkClickBehavior {
+    /// Do nothing when a local markdown link is clicked.
+    Ignore,
+    /// Open the linked file in a new editor tab.
+    #[default]
+    OpenTab,
+    /// Open the linked file in a new markdown preview tab.
+    OpenPreview,
+    /// Navigate the current preview to the linked file with back/forward history support.
+    Navigate,
+}
