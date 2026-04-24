@@ -1,7 +1,26 @@
 use gpui::{App, actions};
+use settings::{RegisterSetting, Settings, SettingsContent};
 use workspace::Workspace;
 
 pub mod markdown_preview_view;
+
+pub use settings::MarkdownPreviewLinkClickBehavior;
+
+#[derive(RegisterSetting)]
+pub struct MarkdownPreviewSettings {
+    pub link_click_behavior: MarkdownPreviewLinkClickBehavior,
+}
+
+impl Settings for MarkdownPreviewSettings {
+    fn from_settings(content: &SettingsContent) -> Self {
+        let markdown_preview = content.markdown_preview.as_ref();
+        Self {
+            link_click_behavior: markdown_preview
+                .and_then(|mp| mp.link_click_behavior)
+                .unwrap_or_default(),
+        }
+    }
+}
 
 pub use zed_actions::preview::markdown::{OpenPreview, OpenPreviewToTheSide};
 
@@ -32,6 +51,7 @@ actions!(
 );
 
 pub fn init(cx: &mut App) {
+    MarkdownPreviewSettings::register(cx);
     cx.observe_new(|workspace: &mut Workspace, window, cx| {
         let Some(window) = window else {
             return;
